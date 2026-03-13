@@ -1,0 +1,5 @@
+{
+  "name": "Lumina Gallery",
+  "description": "A self-hosted photo gallery merging Obsidian-style markdown notes with Google Photos-like organization, featuring local storage and AI-powered insights.",
+  "requestFramePermissions": []
+}

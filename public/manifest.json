@@ -1,0 +1,21 @@
+{
+  "name": "Lumina Gallery",
+  "short_name": "Lumina",
+  "description": "A private, AI-powered photo gallery with markdown notes.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#F5F5F0",
+  "theme_color": "#000000",
+  "icons": [
+    {
+      "src": "https://picsum.photos/seed/lumina/192/192",
+      "sizes": "192x192",
+      "type": "image/png"
+    },
+    {
+      "src": "https://picsum.photos/seed/lumina/512/512",
+      "sizes": "512x512",
+      "type": "image/png"
+    }
+  ]
+}

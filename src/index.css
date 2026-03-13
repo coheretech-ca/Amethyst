@@ -1,0 +1,51 @@
+@import "tailwindcss";
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=Libre+Baskerville:italic&family=JetBrains+Mono&display=swap');
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Libre Baskerville", serif;
+  --font-mono: "JetBrains Mono", monospace;
+}
+
+body {
+  @apply antialiased;
+}
+
+.serif {
+  font-family: var(--font-serif);
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(0, 0, 0, 0.1);
+  border-radius: 10px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 0, 0, 0.2);
+}
+
+/* Markdown Styles */
+.prose h1, .prose h2, .prose h3 {
+  @apply font-medium tracking-tight mt-6 mb-4;
+}
+
+.prose p {
+  @apply leading-relaxed mb-4 text-black/80;
+}
+
+.prose ul {
+  @apply list-disc list-inside mb-4;
+}
+
+.prose blockquote {
+  @apply border-l-2 border-black/10 pl-4 italic text-black/60;
+}
