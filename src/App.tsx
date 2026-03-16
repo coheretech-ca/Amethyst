@@ -28,9 +28,10 @@ import {
   ZoomIn,
   ZoomOut,
   Crop,
+  RefreshCw,
+  FolderPlus,
   AlertCircle,
   Check,
-  RefreshCw,
   Folder,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
@@ -56,6 +57,7 @@ interface Photo {
   size: number;
   width: number;
   height: number;
+  access_count: number;
   folder_id: string | null;
   created_at: string;
   updated_at: string;
@@ -83,6 +85,51 @@ interface TagType {
   id: string;
   name: string;
 }
+
+const Logo = () => (
+  <div className="flex items-center gap-3 group cursor-pointer">
+    <div className="relative w-12 h-12 flex items-center justify-center">
+      {/* Glow Effect */}
+      <div className="absolute inset-0 bg-amethyst-500/30 rounded-full blur-xl group-hover:bg-amethyst-400/40 transition-all duration-700"></div>
+      
+      {/* Gem Vector */}
+      <svg viewBox="0 0 100 100" className="w-10 h-10 drop-shadow-[0_0_15px_rgba(168,85,247,0.5)] group-hover:scale-110 transition-transform duration-500">
+        <defs>
+          <linearGradient id="gem-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+            <stop offset="0%" stopColor="#d8b4fe" />
+            <stop offset="50%" stopColor="#a855f7" />
+            <stop offset="100%" stopColor="#7e22ce" />
+          </linearGradient>
+          <filter id="inner-glow">
+            <feGaussianBlur in="SourceGraphic" stdDeviation="2" result="blur" />
+            <feComposite in="SourceGraphic" in2="blur" operator="out" result="glow" />
+          </filter>
+        </defs>
+        {/* Main Gem Body */}
+        <path 
+          d="M50 5 L85 25 L85 75 L50 95 L15 75 L15 25 Z" 
+          fill="url(#gem-grad)" 
+          className="stroke-white/20 stroke-[0.5]"
+        />
+        {/* Facets */}
+        <path d="M50 5 L50 95" stroke="white/30" strokeWidth="0.5" />
+        <path d="M15 25 L85 25" stroke="white/30" strokeWidth="0.5" />
+        <path d="M15 75 L85 75" stroke="white/30" strokeWidth="0.5" />
+        <path d="M15 25 L50 50 L85 25" stroke="white/30" strokeWidth="0.5" fill="none" />
+        <path d="M15 75 L50 50 L85 75" stroke="white/30" strokeWidth="0.5" fill="none" />
+        <path d="M15 25 L15 75" stroke="white/30" strokeWidth="0.5" />
+        <path d="M85 25 L85 75" stroke="white/30" strokeWidth="0.5" />
+        {/* Highlights */}
+        <path d="M50 5 L65 20 L50 35 L35 20 Z" fill="white/20" />
+        <circle cx="40" cy="30" r="2" fill="white/40" filter="url(#inner-glow)" />
+      </svg>
+    </div>
+    <div className="flex flex-col">
+      <span className="text-2xl font-bold tracking-tighter text-amethyst-50 italic serif leading-none group-hover:text-white transition-colors">Amethyst</span>
+      <span className="text-[9px] text-amethyst-300/40 uppercase tracking-[0.4em] font-bold mt-1 group-hover:text-amethyst-300/60 transition-colors">Fine Art Gallery</span>
+    </div>
+  </div>
+);
 
 export default function App() {
   const [photos, setPhotos] = useState<Photo[]>([]);
@@ -115,12 +162,89 @@ export default function App() {
   const [selectedPhotoIds, setSelectedPhotoIds] = useState<Set<string>>(new Set());
   const [contextMenu, setContextMenu] = useState<{ x: number, y: number, photo?: Photo, folder?: Folder } | null>(null);
   const [isEditingFolder, setIsEditingFolder] = useState<Folder | null>(null);
+  const [grouping, setGrouping] = useState<'none' | 'date' | 'month' | 'year'>('none');
+  const [layoutMode, setLayoutMode] = useState<'grid' | 'moodboard'>('grid');
 
   useEffect(() => {
     const handleResize = () => setIsMobile(window.innerWidth < 768);
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
+
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const syncWithLocalFolder = async () => {
+    if (!('showDirectoryPicker' in window)) {
+      alert("Your browser doesn't support the File System Access API. Please use a modern browser like Chrome or Edge.");
+      return;
+    }
+
+    try {
+      setIsSyncing(true);
+      const handle = await (window as any).showDirectoryPicker();
+      
+      let uploadCount = 0;
+      let skipCount = 0;
+
+      // Recursive function to read files
+      const processHandle = async (dirHandle: any, path = "") => {
+        for await (const entry of dirHandle.values()) {
+          if (entry.kind === 'file') {
+            const file = await entry.getFile();
+            if (file.type.startsWith('image/')) {
+              const exists = photos.some(p => p.filename === file.name);
+              if (!exists) {
+                const base64 = await new Promise<string>((resolve) => {
+                  const reader = new FileReader();
+                  reader.onload = (e) => resolve(e.target?.result as string);
+                  reader.readAsDataURL(file);
+                });
+
+                try {
+                  await fetch('/api/photos', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                      filename: file.name,
+                      data: base64,
+                      folder_id: currentFolderId
+                    })
+                  });
+                  uploadCount++;
+                } catch (err) {
+                  console.error('Failed to upload synced file', err);
+                }
+              } else {
+                skipCount++;
+              }
+            }
+          } else if (entry.kind === 'directory') {
+            await processHandle(entry, `${path}${entry.name}/`);
+          }
+        }
+      };
+
+      await processHandle(handle);
+      fetchPhotos();
+      alert(`Sync completed! ${uploadCount} new photos uploaded, ${skipCount} skipped.`);
+    } catch (err) {
+      if ((err as Error).name !== 'AbortError') {
+        console.error('Failed to sync folder', err);
+        alert("Failed to sync folder. See console for details.");
+      }
+    } finally {
+      setIsSyncing(false);
+    }
+  };
+
+  const incrementAccess = async (photoId: string) => {
+    try {
+      await fetch(`/api/photos/${photoId}/access`, { method: 'PATCH' });
+      setPhotos(prev => prev.map(p => p.id === photoId ? { ...p, access_count: p.access_count + 1 } : p));
+    } catch (err) {
+      console.error('Failed to increment access', err);
+    }
+  };
 
   const fetchPhotos = async () => {
     try {
@@ -268,13 +392,20 @@ export default function App() {
 
   const bulkMove = async (folderId: string | null) => {
     const ids = Array.from(selectedPhotoIds);
-    await fetch('/api/photos/bulk-move', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ids, folder_id: folderId })
-    });
-    clearSelection();
-    fetchPhotos();
+    if (ids.length === 0) return;
+    try {
+      const res = await fetch('/api/photos/bulk-move', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids, folder_id: folderId })
+      });
+      if (res.ok) {
+        clearSelection();
+        fetchPhotos();
+      }
+    } catch (err) {
+      console.error('Failed to bulk move photos', err);
+    }
   };
 
   const bulkAddTag = async (tagName: string) => {
@@ -312,12 +443,18 @@ export default function App() {
   };
 
   const movePhotoToFolder = async (photoId: string, folderId: string | null) => {
-    await fetch(`/api/photos/${photoId}/folder`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ folder_id: folderId })
-    });
-    fetchPhotos();
+    try {
+      const res = await fetch(`/api/photos/${photoId}/folder`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ folder_id: folderId })
+      });
+      if (res.ok) {
+        fetchPhotos();
+      }
+    } catch (err) {
+      console.error('Failed to move photo to folder', err);
+    }
   };
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
@@ -483,7 +620,35 @@ export default function App() {
     }
   };
 
-  const filteredPhotos = photos; // Search is now handled by backend
+  const filteredPhotos = photos;
+
+  const getGroupedPhotos = () => {
+    if (grouping === 'none') return [{ title: '', photos: filteredPhotos }];
+
+    const groups: { [key: string]: Photo[] } = {};
+    filteredPhotos.forEach(photo => {
+      const date = new Date(photo.created_at);
+      let key = '';
+      if (grouping === 'date') key = format(date, 'MMMM d, yyyy');
+      else if (grouping === 'month') key = format(date, 'MMMM yyyy');
+      else if (grouping === 'year') key = format(date, 'yyyy');
+
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(photo);
+    });
+
+    return Object.entries(groups).map(([title, photos]) => ({ title, photos }));
+  };
+
+  const groupedPhotos = getGroupedPhotos();
+
+  const getMoodBoardSize = (accessCount: number) => {
+    if (accessCount > 30) return "md:col-span-3 md:row-span-3 col-span-2 row-span-2";
+    if (accessCount > 15) return "md:col-span-2 md:row-span-2 col-span-2 row-span-2";
+    if (accessCount > 7) return "md:col-span-2 md:row-span-1 col-span-2 row-span-1";
+    if (accessCount > 3) return "md:col-span-1 md:row-span-2 col-span-1 row-span-2";
+    return "md:col-span-1 md:row-span-1 col-span-1 row-span-1";
+  };
 
   const currentFolder = folders.find(f => f.id === currentFolderId);
   const subFolders = folders.filter(f => f.parent_id === currentFolderId);
@@ -514,13 +679,35 @@ export default function App() {
           <li>
             <button 
               onClick={() => { setCurrentFolderId(folder.id); setCurrentSmartAlbumId(null); setIsSidebarOpen(false); }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.currentTarget.classList.add('bg-amethyst-500/20');
+              }}
+              onDragLeave={(e) => {
+                e.currentTarget.classList.remove('bg-amethyst-500/20');
+              }}
+              onDrop={(e) => {
+                e.preventDefault();
+                e.currentTarget.classList.remove('bg-amethyst-500/20');
+                const photoId = e.dataTransfer.getData('photoId');
+                if (photoId) {
+                  movePhotoToFolder(photoId, folder.id);
+                } else {
+                  // Check if multiple photos are being dragged (if we implement that)
+                  const bulkData = e.dataTransfer.getData('bulkPhotos');
+                  if (bulkData) {
+                    bulkMove(folder.id);
+                  }
+                }
+              }}
               className={cn(
-                "w-full text-left px-3 py-2 rounded-lg text-sm transition-all flex items-center gap-2",
-                currentFolderId === folder.id ? "bg-black text-white" : "hover:bg-black/5"
+                "w-full text-left px-3 py-2 rounded-lg text-sm transition-all flex items-center gap-2 group/folder",
+                currentFolderId === folder.id ? "bg-amethyst-600 text-white" : "text-amethyst-100 hover:bg-white/5"
               )}
               style={{ paddingLeft: `${(depth + 1) * 0.75}rem` }}
             >
-              <Folder size={16} /> {folder.name}
+              <Folder size={16} className={cn(currentFolderId === folder.id ? "text-white" : "text-amethyst-400")} /> 
+              <span className="truncate">{folder.name}</span>
             </button>
           </li>
           {renderFolderItems(folder.id, depth + 1)}
@@ -529,29 +716,26 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-[#F5F5F0] text-[#141414] font-sans selection:bg-black selection:text-white flex flex-col" {...getRootProps()}>
+    <div className="min-h-screen bg-amethyst-950 text-amethyst-50 font-sans selection:bg-amethyst-500 selection:text-white flex flex-col" {...getRootProps()}>
       <input {...getInputProps()} />
       
       {/* Navigation */}
-      <nav className="sticky top-0 z-40 bg-[#F5F5F0]/80 backdrop-blur-md border-b border-black/5 px-4 md:px-6 py-4 flex items-center justify-between gap-4">
+      <nav className="sticky top-0 z-40 amethyst-glass border-b border-amethyst-500/10 px-4 md:px-6 py-4 flex items-center justify-between gap-4">
         <div className="flex items-center gap-2 md:gap-3">
           {isMobile && (
-            <button onClick={() => setIsSidebarOpen(true)} className="p-2 hover:bg-black/5 rounded-full">
+            <button onClick={() => setIsSidebarOpen(true)} className="p-2 hover:bg-white/10 rounded-full">
               <Menu size={20} />
             </button>
           )}
-          <div className="w-8 h-8 md:w-10 md:h-10 bg-black rounded-full flex items-center justify-center text-white shrink-0">
-            <ImageIcon size={isMobile ? 16 : 20} />
-          </div>
-          <h1 className="text-lg md:text-xl font-medium tracking-tight italic serif hidden sm:block">Lumina</h1>
+          <Logo />
         </div>
 
         <div className="flex-1 max-w-md relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-black/40" size={18} />
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-amethyst-300/40" size={18} />
           <input 
             type="text"
             placeholder="Search filename, notes, tags..."
-            className="w-full bg-black/5 border-none rounded-full py-2 pl-10 pr-4 focus:ring-2 focus:ring-black/10 transition-all outline-none text-sm"
+            className="w-full bg-amethyst-900/40 border border-amethyst-500/10 rounded-full py-2 pl-10 pr-4 focus:ring-2 focus:ring-amethyst-500/20 transition-all outline-none text-sm text-amethyst-50 placeholder:text-amethyst-300/30"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
           />
@@ -559,26 +743,49 @@ export default function App() {
 
         <div className="flex items-center gap-2 md:gap-4">
           {!isMobile && (
-            <div className="flex bg-black/5 rounded-full p-1">
+            <div className="flex bg-amethyst-900/40 rounded-full p-1 border border-amethyst-500/10">
               <button 
                 onClick={() => setViewMode('grid')}
-                className={cn("p-1.5 rounded-full transition-all", viewMode === 'grid' ? "bg-white shadow-sm" : "opacity-50 hover:opacity-100")}
+                className={cn("p-1.5 rounded-full transition-all", viewMode === 'grid' ? "bg-amethyst-600 text-white shadow-lg" : "text-amethyst-300 opacity-50 hover:opacity-100")}
+                title="Grid View"
               >
                 <Grid size={18} />
               </button>
               <button 
                 onClick={() => setViewMode('list')}
-                className={cn("p-1.5 rounded-full transition-all", viewMode === 'list' ? "bg-white shadow-sm" : "opacity-50 hover:opacity-100")}
+                className={cn("p-1.5 rounded-full transition-all", viewMode === 'list' ? "bg-amethyst-600 text-white shadow-lg" : "text-amethyst-300 opacity-50 hover:opacity-100")}
+                title="List View"
               >
                 <ListIcon size={18} />
               </button>
+              <button 
+                onClick={() => setLayoutMode(prev => prev === 'grid' ? 'moodboard' : 'grid')}
+                className={cn("p-1.5 rounded-full transition-all ml-1", layoutMode === 'moodboard' ? "bg-amethyst-600 text-white shadow-lg" : "text-amethyst-300 opacity-50 hover:opacity-100")}
+                title="Toggle Moodboard"
+              >
+                <ZoomIn size={18} />
+              </button>
             </div>
           )}
-          <label className="cursor-pointer bg-black text-white px-3 md:px-4 py-2 rounded-full flex items-center gap-2 hover:bg-black/80 transition-all text-sm">
-            <Plus size={18} />
-            <span className="hidden sm:inline">Upload</span>
-            <input type="file" multiple className="hidden" onChange={(e) => onDrop(Array.from(e.target.files || []))} />
-          </label>
+          
+          <div className="flex items-center gap-2">
+            <select 
+              value={grouping}
+              onChange={(e) => setGrouping(e.target.value as any)}
+              className="bg-amethyst-900/60 border border-amethyst-500/10 rounded-full px-3 py-1.5 text-[10px] md:text-xs text-amethyst-100 outline-none focus:ring-1 focus:ring-amethyst-500/30 appearance-none cursor-pointer hover:bg-amethyst-800/60 transition-all"
+            >
+              <option value="none">No Grouping</option>
+              <option value="date">By Day</option>
+              <option value="month">By Month</option>
+              <option value="year">By Year</option>
+            </select>
+
+            <label className="cursor-pointer bg-amethyst-600 text-white p-2 md:px-4 md:py-2 rounded-full flex items-center gap-2 hover:bg-amethyst-500 hover:shadow-lg hover:shadow-amethyst-500/20 transition-all text-sm font-medium">
+              <Plus size={18} />
+              <span className="hidden sm:inline">Upload</span>
+              <input type="file" multiple className="hidden" onChange={(e) => onDrop(Array.from(e.target.files || []))} />
+            </label>
+          </div>
         </div>
       </nav>
 
@@ -598,27 +805,44 @@ export default function App() {
 
         {/* Sidebar */}
         <aside className={cn(
-          "bg-white border-r border-black/5 p-6 flex flex-col gap-8 overflow-y-auto transition-all duration-300 z-50",
+          "bg-amethyst-950 border-r border-amethyst-500/10 p-6 flex flex-col gap-8 overflow-y-auto transition-all duration-300 z-50",
           isMobile ? "fixed inset-y-0 left-0 w-72 shadow-2xl" : "w-64",
           isMobile && !isSidebarOpen && "-translate-x-full"
         )}>
-          {isMobile && (
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-xl font-medium italic serif">Lumina</h2>
-              <button onClick={() => setIsSidebarOpen(false)} className="p-2 hover:bg-black/5 rounded-full">
+          <div className="flex items-center justify-between mb-4">
+            <Logo />
+            {isMobile && (
+              <button onClick={() => setIsSidebarOpen(false)} className="p-2 hover:bg-white/5 rounded-full text-amethyst-300">
                 <X size={20} />
               </button>
-            </div>
-          )}
+            )}
+          </div>
           <div>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[10px] font-bold text-black/40 uppercase tracking-widest">Library</h3>
+              <h3 className="text-[10px] font-bold text-amethyst-300/40 uppercase tracking-widest">Library</h3>
             </div>
             <ul className="space-y-1">
               <li>
                 <button 
                   onClick={() => { setCurrentFolderId(null); setCurrentSmartAlbumId(null); setIsSidebarOpen(false); }}
-                  className={cn("w-full text-left px-3 py-2 rounded-lg text-sm transition-all flex items-center gap-2", !currentFolderId && !currentSmartAlbumId ? "bg-black text-white" : "hover:bg-black/5")}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                    e.currentTarget.classList.add('bg-amethyst-500/20');
+                  }}
+                  onDragLeave={(e) => {
+                    e.currentTarget.classList.remove('bg-amethyst-500/20');
+                  }}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    e.currentTarget.classList.remove('bg-amethyst-500/20');
+                    const photoId = e.dataTransfer.getData('photoId');
+                    if (photoId) {
+                      movePhotoToFolder(photoId, null);
+                    } else if (e.dataTransfer.getData('bulkPhotos')) {
+                      bulkMove(null);
+                    }
+                  }}
+                  className={cn("w-full text-left px-3 py-2 rounded-lg text-sm transition-all flex items-center gap-2", !currentFolderId && !currentSmartAlbumId ? "bg-amethyst-600 text-white" : "text-amethyst-100 hover:bg-white/5")}
                 >
                   <ImageIcon size={16} /> All Photos
                 </button>
@@ -626,7 +850,7 @@ export default function App() {
               <li>
                 <button 
                   onClick={() => { setShowGraph(true); setIsSidebarOpen(false); }}
-                  className="w-full text-left px-3 py-2 rounded-lg text-sm transition-all flex items-center gap-2 hover:bg-black/5"
+                  className="w-full text-left px-3 py-2 rounded-lg text-sm transition-all flex items-center gap-2 text-amethyst-100 hover:bg-white/5"
                 >
                   <Share2 size={16} /> Graph View
                 </button>
@@ -636,8 +860,8 @@ export default function App() {
 
           <div>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[10px] font-bold text-black/40 uppercase tracking-widest">Folders</h3>
-              <button onClick={() => setIsCreatingFolder(true)} className="p-1 hover:bg-black/5 rounded-full transition-all">
+              <h3 className="text-[10px] font-bold text-amethyst-300/40 uppercase tracking-widest">Folders</h3>
+              <button onClick={() => setIsCreatingFolder(true)} className="p-1 hover:bg-white/10 rounded-full transition-all text-amethyst-300">
                 <Plus size={14} />
               </button>
             </div>
@@ -646,12 +870,12 @@ export default function App() {
                 <input 
                   type="text" 
                   placeholder="Folder name" 
-                  className="flex-1 text-xs border border-black/10 rounded-lg px-2 py-1 outline-none"
+                  className="flex-1 text-xs bg-amethyst-900/40 border border-amethyst-500/10 rounded-lg px-2 py-1 outline-none text-amethyst-50"
                   value={newFolderName}
                   onChange={(e) => setNewFolderName(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && createFolder()}
                 />
-                <button onClick={createFolder} className="bg-black text-white p-1 rounded-lg"><Plus size={14} /></button>
+                <button onClick={createFolder} className="bg-amethyst-600 text-white p-1 rounded-lg"><Plus size={14} /></button>
               </div>
             )}
             <ul className="space-y-1">
@@ -661,8 +885,8 @@ export default function App() {
 
           <div>
             <div className="flex items-center justify-between mb-4">
-              <h3 className="text-[10px] font-bold text-black/40 uppercase tracking-widest">Smart Albums</h3>
-              <button onClick={() => setIsCreatingSmartAlbum(true)} className="p-1 hover:bg-black/5 rounded-full transition-all">
+              <h3 className="text-[10px] font-bold text-amethyst-300/40 uppercase tracking-widest">Smart Albums</h3>
+              <button onClick={() => setIsCreatingSmartAlbum(true)} className="p-1 hover:bg-white/10 rounded-full transition-all text-amethyst-300">
                 <Plus size={14} />
               </button>
             </div>
@@ -671,32 +895,32 @@ export default function App() {
                 <input 
                   type="text" 
                   placeholder="Album name" 
-                  className="text-xs border border-black/10 rounded-lg px-2 py-1 outline-none"
+                  className="text-xs bg-amethyst-900/40 border border-amethyst-500/10 rounded-lg px-2 py-1 outline-none text-amethyst-50"
                   value={newSmartAlbumName}
                   onChange={(e) => setNewSmartAlbumName(e.target.value)}
                 />
                 <input 
                   type="text" 
                   placeholder="Tags (comma separated)" 
-                  className="text-xs border border-black/10 rounded-lg px-2 py-1 outline-none"
+                  className="text-xs bg-amethyst-900/40 border border-amethyst-500/10 rounded-lg px-2 py-1 outline-none text-amethyst-50"
                   value={newSmartAlbumTags}
                   onChange={(e) => setNewSmartAlbumTags(e.target.value)}
                 />
                 <div className="flex gap-2">
                   <input 
                     type="date" 
-                    className="text-[10px] border border-black/10 rounded-lg px-2 py-1 outline-none flex-1"
+                    className="text-[10px] bg-amethyst-900/40 border border-amethyst-500/10 rounded-lg px-2 py-1 outline-none flex-1 text-amethyst-50"
                     value={newSmartAlbumStartDate}
                     onChange={(e) => setNewSmartAlbumStartDate(e.target.value)}
                   />
                   <input 
                     type="date" 
-                    className="text-[10px] border border-black/10 rounded-lg px-2 py-1 outline-none flex-1"
+                    className="text-[10px] bg-amethyst-900/40 border border-amethyst-500/10 rounded-lg px-2 py-1 outline-none flex-1 text-amethyst-50"
                     value={newSmartAlbumEndDate}
                     onChange={(e) => setNewSmartAlbumEndDate(e.target.value)}
                   />
                 </div>
-                <button onClick={createSmartAlbum} className="bg-black text-white py-1 rounded-lg text-xs">Create Album</button>
+                <button onClick={createSmartAlbum} className="bg-amethyst-600 text-white py-1 rounded-lg text-xs">Create Album</button>
               </div>
             )}
             <ul className="space-y-1">
@@ -704,13 +928,27 @@ export default function App() {
                 <li key={album.id}>
                   <button 
                     onClick={() => { setCurrentSmartAlbumId(album.id); setCurrentFolderId(null); }}
-                    className={cn("w-full text-left px-3 py-2 rounded-lg text-sm transition-all flex items-center gap-2", currentSmartAlbumId === album.id ? "bg-black text-white" : "hover:bg-black/5")}
+                    className={cn("w-full text-left px-3 py-2 rounded-lg text-sm transition-all flex items-center gap-2", currentSmartAlbumId === album.id ? "bg-amethyst-600 text-white" : "text-amethyst-100 hover:bg-white/5")}
                   >
                     <ImageIcon size={16} /> {album.name}
                   </button>
                 </li>
               ))}
             </ul>
+          </div>
+
+          <div className="mt-auto pt-6 border-t border-amethyst-500/10">
+            <button
+              onClick={syncWithLocalFolder}
+              disabled={isSyncing}
+              className="w-full flex items-center gap-3 px-4 py-3 rounded-xl bg-amethyst-900/40 text-amethyst-100 hover:bg-amethyst-800/60 transition-all border border-amethyst-500/10 group"
+            >
+              <RefreshCw size={18} className={cn("text-amethyst-400 group-hover:rotate-180 transition-transform duration-500", isSyncing && "animate-spin")} />
+              <div className="flex flex-col items-start">
+                <span className="text-sm font-medium">{isSyncing ? "Syncing..." : "Sync Local Folder"}</span>
+                <span className="text-[10px] text-amethyst-300/40">Import from device</span>
+              </div>
+            </button>
           </div>
         </aside>
 
@@ -730,22 +968,22 @@ export default function App() {
               <h2 className="text-3xl font-medium tracking-tight italic serif">
                 {currentSmartAlbumId ? smartAlbums.find(a => a.id === currentSmartAlbumId)?.name : (currentFolder ? currentFolder.name : "All Photos")}
               </h2>
-              <div className="flex items-center gap-2 mt-2 text-sm text-black/40">
+              <div className="flex items-center gap-2 mt-2 text-sm text-amethyst-300/60">
                 {currentFolderId && (
-                  <button onClick={() => setCurrentFolderId(currentFolder?.parent_id || null)} className="hover:text-black flex items-center gap-1 transition-all">
+                  <button onClick={() => setCurrentFolderId(currentFolder?.parent_id || null)} className="hover:text-amethyst-100 flex items-center gap-1 transition-all">
                     <ChevronLeft size={14} /> Back
                   </button>
                 )}
                 <span>{filteredPhotos.length} items</span>
                 {filteredPhotos.length > 0 && (
                   <>
-                    <span className="w-1 h-1 bg-black/10 rounded-full" />
+                    <span className="w-1 h-1 bg-amethyst-500/20 rounded-full" />
                     <button 
                       onClick={() => {
                         if (selectedPhotoIds.size === filteredPhotos.length) clearSelection();
                         else setSelectedPhotoIds(new Set(filteredPhotos.map(p => p.id)));
                       }}
-                      className="hover:text-black transition-all"
+                      className="hover:text-amethyst-100 transition-all"
                     >
                       {selectedPhotoIds.size === filteredPhotos.length ? "Deselect All" : "Select All"}
                     </button>
@@ -767,9 +1005,9 @@ export default function App() {
                     <button 
                       onClick={() => setCurrentFolderId(folder.id)}
                       onContextMenu={(e) => handleContextMenu(e, folder)}
-                      className="w-full bg-white border border-black/5 p-4 rounded-2xl flex flex-col items-center gap-2 hover:shadow-lg transition-all"
+                      className="w-full bg-amethyst-900/40 border border-amethyst-500/10 p-4 rounded-2xl flex flex-col items-center gap-2 hover:bg-amethyst-800/40 hover:shadow-lg transition-all text-amethyst-100"
                     >
-                      <Folder size={32} className="text-black/20" />
+                      <Folder size={32} className="text-amethyst-400/40" />
                       <span className="text-sm font-medium">{folder.name}</span>
                     </button>
                   </LongPressWrapper>
@@ -779,105 +1017,127 @@ export default function App() {
           )}
 
           {filteredPhotos.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-32 text-black/30">
+            <div className="flex flex-col items-center justify-center py-32 text-amethyst-300/20">
               <ImageIcon size={64} strokeWidth={1} />
-              <p className="mt-4 text-lg italic serif">This view is empty.</p>
+              <p className="mt-4 text-lg italic serif text-amethyst-300/40">This view is empty.</p>
             </div>
           ) : (
-            <div className={cn(
-              "gap-6",
-              viewMode === 'grid' ? "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5" : "flex flex-col"
-            )}>
-              {filteredPhotos.map((photo) => (
-                <motion.div
-                  layoutId={photo.id}
-                  key={photo.id}
-                  onClick={(e) => {
-                    if (selectedPhotoIds.size > 0 || e.metaKey || e.ctrlKey) {
-                      togglePhotoSelection(photo.id, e);
-                    } else {
-                      setSelectedPhoto(photo);
-                    }
-                  }}
-                  onContextMenu={(e) => handleContextMenu(e, photo)}
-                  className={cn(
-                    "group relative cursor-pointer overflow-hidden rounded-2xl transition-all hover:shadow-xl",
-                    viewMode === 'grid' ? "aspect-square bg-black/5" : "flex items-center gap-6 p-4 bg-white border border-black/5",
-                    selectedPhotoIds.has(photo.id) ? "ring-2 ring-black border-transparent scale-[0.98]" : "hover:-translate-y-1"
+            <div className="space-y-12">
+              {groupedPhotos.map((group) => (
+                <div key={group.title} className="space-y-6">
+                  {grouping !== 'none' && (
+                    <div className="flex items-center gap-4">
+                      <h3 className="text-sm font-bold text-amethyst-300/40 uppercase tracking-widest whitespace-nowrap">{group.title}</h3>
+                      <div className="h-px w-full bg-amethyst-500/10" />
+                    </div>
                   )}
-                >
-                  <div 
-                    onClick={(e) => togglePhotoSelection(photo.id, e)}
-                    className={cn(
-                      "absolute top-3 left-3 z-20 w-5 h-5 rounded-full border-2 transition-all flex items-center justify-center",
-                      selectedPhotoIds.has(photo.id) 
-                        ? "bg-black border-black text-white" 
-                        : "bg-white/50 border-white opacity-0 group-hover:opacity-100"
-                    )}
-                  >
-                    {selectedPhotoIds.has(photo.id) && <Check size={12} strokeWidth={3} />}
-                  </div>
+                  <div className={cn(
+                    "gap-4 md:gap-6",
+                    layoutMode === 'moodboard' ? "grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 grid-flow-dense auto-rows-[150px] md:auto-rows-[200px]" : (viewMode === 'grid' ? "grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5" : "flex flex-col")
+                  )}>
+                    {group.photos.map((photo) => (
+                      <motion.div
+                        layoutId={photo.id}
+                        key={photo.id}
+                        draggable
+                        onDragStart={(e: any) => {
+                          if (selectedPhotoIds.has(photo.id)) {
+                            e.dataTransfer.setData('bulkPhotos', 'true');
+                          } else {
+                            e.dataTransfer.setData('photoId', photo.id);
+                          }
+                          // Set a ghost image if needed, or just use default
+                        }}
+                        onClick={(e) => {
+                          if (selectedPhotoIds.size > 0 || e.metaKey || e.ctrlKey) {
+                            togglePhotoSelection(photo.id, e);
+                          } else {
+                            setSelectedPhoto(photo);
+                            incrementAccess(photo.id);
+                          }
+                        }}
+                        onContextMenu={(e) => handleContextMenu(e, photo)}
+                        className={cn(
+                          "group relative cursor-pointer overflow-hidden rounded-2xl transition-all hover:shadow-xl",
+                          layoutMode === 'moodboard' ? getMoodBoardSize(photo.access_count) : (viewMode === 'grid' ? "aspect-square bg-amethyst-900/40" : "flex items-center gap-6 p-4 bg-amethyst-900/40 border border-amethyst-500/10"),
+                          selectedPhotoIds.has(photo.id) ? "ring-2 ring-amethyst-500 border-transparent scale-[0.98]" : "hover:-translate-y-1"
+                        )}
+                      >
+                        <div 
+                          onClick={(e) => togglePhotoSelection(photo.id, e)}
+                          className={cn(
+                            "absolute top-3 left-3 z-20 w-5 h-5 rounded-full border-2 transition-all flex items-center justify-center",
+                            selectedPhotoIds.has(photo.id) 
+                              ? "bg-amethyst-500 border-amethyst-500 text-white" 
+                              : "bg-white/20 border-white opacity-0 group-hover:opacity-100"
+                          )}
+                        >
+                          {selectedPhotoIds.has(photo.id) && <Check size={12} strokeWidth={3} />}
+                        </div>
 
-                  {/* Indicators */}
-                  <div className="absolute top-3 right-3 z-20 flex gap-1.5">
-                    {photo.has_note > 0 && (
-                      <div className="bg-white/90 backdrop-blur-sm p-1.5 rounded-full shadow-sm text-black/60" title="Has notes">
-                        <StickyNote size={12} />
-                      </div>
-                    )}
-                    {photo.tag_count > 0 && (
-                      <div className="bg-white/90 backdrop-blur-sm p-1.5 rounded-full shadow-sm text-black/60" title={`${photo.tag_count} tags`}>
-                        <Tag size={12} />
-                      </div>
-                    )}
-                  </div>
+                        {/* Indicators */}
+                        <div className="absolute top-3 right-3 z-20 flex gap-1.5">
+                          {photo.has_note > 0 && (
+                            <div className="bg-amethyst-900/80 backdrop-blur-sm p-1.5 rounded-full shadow-sm text-amethyst-200" title="Has notes">
+                              <StickyNote size={12} />
+                            </div>
+                          )}
+                          {photo.tag_count > 0 && (
+                            <div className="bg-amethyst-900/80 backdrop-blur-sm p-1.5 rounded-full shadow-sm text-amethyst-200" title={`${photo.tag_count} tags`}>
+                              <Tag size={12} />
+                            </div>
+                          )}
+                        </div>
 
-                  <LongPressWrapper onLongPress={(e) => handleContextMenu(e as any, photo)}>
-                    <div className={cn(
-                      "relative overflow-hidden bg-black/5",
-                      viewMode === 'grid' ? "aspect-square" : "w-24 h-24 rounded-lg flex-shrink-0"
-                    )}>
-                      <Thumbnail 
-                        photoId={photo.id}
-                        alt={photo.filename}
-                        className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                      />
-                      
-                      {/* Grid Overlay */}
-                      {viewMode === 'grid' && (
-                        <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-black/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">
-                          <p className="text-white text-xs font-medium truncate">{photo.filename}</p>
-                          <div className="flex items-center justify-between mt-1">
-                            <p className="text-white/60 text-[10px]">{format(new Date(photo.created_at), 'MMM d, yyyy')}</p>
-                            {photo.folder_id && !currentFolderId && (
-                              <span className="text-[9px] bg-white/20 backdrop-blur-md px-1.5 py-0.5 rounded-full text-white flex items-center gap-1">
-                                <Folder size={8} />
-                                {folders.find(f => f.id === photo.folder_id)?.name}
-                              </span>
+                        <LongPressWrapper onLongPress={(e) => handleContextMenu(e as any, photo)}>
+                          <div className={cn(
+                            "relative overflow-hidden bg-amethyst-900/20",
+                            layoutMode === 'moodboard' || viewMode === 'grid' ? "h-full w-full" : "w-24 h-24 rounded-lg flex-shrink-0"
+                          )}>
+                            <Thumbnail 
+                              photoId={photo.id}
+                              alt={photo.filename}
+                              className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                            />
+                            
+                            {/* Grid Overlay */}
+                            {(layoutMode === 'moodboard' || viewMode === 'grid') && (
+                              <div className="absolute inset-0 bg-gradient-to-t from-amethyst-950/80 via-amethyst-950/20 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300 flex flex-col justify-end p-4">
+                                <p className="text-white text-xs font-medium truncate">{photo.filename}</p>
+                                <div className="flex items-center justify-between mt-1">
+                                  <p className="text-amethyst-200/60 text-[10px]">{format(new Date(photo.created_at), 'MMM d, yyyy')}</p>
+                                  {photo.folder_id && !currentFolderId && (
+                                    <span className="text-[9px] bg-white/10 backdrop-blur-md px-1.5 py-0.5 rounded-full text-white flex items-center gap-1">
+                                      <Folder size={8} />
+                                      {folders.find(f => f.id === photo.folder_id)?.name}
+                                    </span>
+                                  )}
+                                </div>
+                              </div>
                             )}
                           </div>
-                        </div>
-                      )}
-                    </div>
-                  </LongPressWrapper>
+                        </LongPressWrapper>
 
-                  {viewMode === 'list' && (
-                    <div className="flex-1">
-                      <div className="flex items-center justify-between gap-2">
-                        <p className="font-medium truncate">{photo.filename}</p>
-                        {photo.folder_id && !currentFolderId && (
-                          <span className="text-[10px] bg-black/5 px-2 py-0.5 rounded-full text-black/40 flex items-center gap-1">
-                            <Folder size={8} />
-                            {folders.find(f => f.id === photo.folder_id)?.name}
-                          </span>
+                        {viewMode === 'list' && layoutMode === 'grid' && (
+                          <div className="flex-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <p className="font-medium truncate text-amethyst-50">{photo.filename}</p>
+                              {photo.folder_id && !currentFolderId && (
+                                <span className="text-[10px] bg-amethyst-500/10 px-2 py-0.5 rounded-full text-amethyst-300 flex items-center gap-1">
+                                  <Folder size={8} />
+                                  {folders.find(f => f.id === photo.folder_id)?.name}
+                                </span>
+                              )}
+                            </div>
+                            <p className="text-xs text-amethyst-300/40 mt-1">
+                              {format(new Date(photo.created_at), 'MMM d, yyyy')}
+                            </p>
+                          </div>
                         )}
-                      </div>
-                      <p className="text-xs text-black/40 mt-1">
-                        {format(new Date(photo.created_at), 'MMM d, yyyy')}
-                      </p>
-                    </div>
-                  )}
-                </motion.div>
+                      </motion.div>
+                    ))}
+                  </div>
+                </div>
               ))}
             </div>
           )}
@@ -891,14 +1151,14 @@ export default function App() {
             initial={{ opacity: 0, scale: 0.95 }}
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
-            className="fixed inset-0 z-[60] bg-[#F5F5F0] flex flex-col"
+            className="fixed inset-0 z-[60] bg-amethyst-950 flex flex-col"
           >
-            <div className="p-4 border-b border-black/5 flex items-center justify-between">
-              <div className="flex items-center gap-2">
+            <div className="p-4 border-b border-amethyst-500/10 flex items-center justify-between">
+              <div className="flex items-center gap-2 text-amethyst-100">
                 <Share2 size={20} />
                 <h2 className="text-xl font-medium italic serif">Knowledge Graph</h2>
               </div>
-              <button onClick={() => setShowGraph(false)} className="p-2 hover:bg-black/5 rounded-full">
+              <button onClick={() => setShowGraph(false)} className="p-2 hover:bg-white/10 rounded-full text-amethyst-300">
                 <X size={24} />
               </button>
             </div>
@@ -916,13 +1176,13 @@ export default function App() {
             initial={{ opacity: 0 }}
             animate={{ opacity: 1 }}
             exit={{ opacity: 0 }}
-            className="fixed inset-0 z-50 flex items-center justify-center bg-[#F5F5F0]/95 backdrop-blur-xl overflow-y-auto md:overflow-hidden"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-amethyst-950/95 backdrop-blur-xl overflow-y-auto md:overflow-hidden"
           >
             <div className="w-full min-h-full md:h-full max-w-7xl flex flex-col md:flex-row relative">
               {/* Close Button */}
               <button 
                 onClick={() => setSelectedPhoto(null)}
-                className="fixed top-4 right-4 z-[70] p-3 rounded-full bg-white/80 backdrop-blur shadow-xl hover:bg-white transition-all md:absolute md:top-6 md:right-6"
+                className="fixed top-4 right-4 z-[70] p-3 rounded-full bg-amethyst-900/80 backdrop-blur shadow-xl hover:bg-amethyst-800 transition-all md:absolute md:top-6 md:right-6 text-amethyst-100"
                 aria-label="Close"
               >
                 <X size={24} />
@@ -936,7 +1196,7 @@ export default function App() {
                   onDragEnd={(_, info) => {
                     if (info.offset.y > 150) setSelectedPhoto(null);
                   }}
-                  className="flex-1 relative rounded-3xl overflow-hidden bg-black/5 flex items-center justify-center group cursor-zoom-in"
+                  className="flex-1 relative rounded-3xl overflow-hidden bg-amethyst-900/40 flex items-center justify-center group cursor-zoom-in"
                 >
                   <Thumbnail 
                     photoId={selectedPhoto.id}
@@ -949,21 +1209,21 @@ export default function App() {
                   <div className="absolute top-4 right-4 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-all">
                     <button 
                       onClick={() => setZoom(prev => Math.min(prev + 0.5, 5))}
-                      className="bg-white/90 backdrop-blur p-2 rounded-full shadow-lg hover:bg-white text-black"
+                      className="bg-amethyst-900/90 backdrop-blur p-2 rounded-full shadow-lg hover:bg-amethyst-800 text-amethyst-100"
                       title="Zoom In"
                     >
                       <ZoomIn size={18} />
                     </button>
                     <button 
                       onClick={() => setZoom(prev => Math.max(prev - 0.5, 0.5))}
-                      className="bg-white/90 backdrop-blur p-2 rounded-full shadow-lg hover:bg-white text-black"
+                      className="bg-amethyst-900/90 backdrop-blur p-2 rounded-full shadow-lg hover:bg-amethyst-800 text-amethyst-100"
                       title="Zoom Out"
                     >
                       <ZoomOut size={18} />
                     </button>
                     <button 
                       onClick={() => setZoom(1)}
-                      className="bg-white/90 backdrop-blur p-2 rounded-full shadow-lg hover:bg-white text-black text-[10px] font-bold"
+                      className="bg-amethyst-900/90 backdrop-blur p-2 rounded-full shadow-lg hover:bg-amethyst-800 text-amethyst-100 text-[10px] font-bold"
                       title="Reset Zoom"
                     >
                       1:1
@@ -972,15 +1232,15 @@ export default function App() {
 
                   <div className="absolute bottom-4 left-1/2 -translate-x-1/2 flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-all">
                     <div className="relative group/resize">
-                      <button className="bg-white/90 backdrop-blur p-2 rounded-full shadow-lg hover:bg-white text-black flex items-center gap-1">
+                      <button className="bg-amethyst-900/90 backdrop-blur p-2 rounded-full shadow-lg hover:bg-amethyst-800 text-amethyst-100 flex items-center gap-1">
                         <Crop size={18} />
-                        {isResizing && <RefreshCw size={12} className="animate-spin" />}
+                        {isResizing && <RefreshCw size={12} className="animate-spin text-amethyst-400" />}
                       </button>
-                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-white border border-black/5 rounded-xl shadow-xl p-2 hidden group-hover/resize:block w-32 z-50">
-                        <p className="text-[10px] font-bold text-black/40 uppercase tracking-widest mb-2 px-2">Resize to</p>
-                        <button onClick={() => resizePhoto(100, 100)} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-black/5 text-xs">100 x 100</button>
-                        <button onClick={() => resizePhoto(200, 200)} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-black/5 text-xs">200 x 200</button>
-                        <button onClick={() => resizePhoto(800, 600)} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-black/5 text-xs">800 x 600</button>
+                      <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 bg-amethyst-900 border border-amethyst-500/10 rounded-xl shadow-xl p-2 hidden group-hover/resize:block w-32 z-50">
+                        <p className="text-[10px] font-bold text-amethyst-300/40 uppercase tracking-widest mb-2 px-2">Resize to</p>
+                        <button onClick={() => resizePhoto(100, 100)} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-white/5 text-xs text-amethyst-100">100 x 100</button>
+                        <button onClick={() => resizePhoto(200, 200)} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-white/5 text-xs text-amethyst-100">200 x 200</button>
+                        <button onClick={() => resizePhoto(800, 600)} className="w-full text-left px-3 py-1.5 rounded-lg hover:bg-white/5 text-xs text-amethyst-100">800 x 600</button>
                       </div>
                     </div>
                     <button 
@@ -999,22 +1259,22 @@ export default function App() {
                         initial={{ opacity: 0 }}
                         animate={{ opacity: 1 }}
                         exit={{ opacity: 0 }}
-                        className="absolute inset-0 z-10 bg-black/60 backdrop-blur-sm flex items-center justify-center p-6"
+                        className="absolute inset-0 z-10 bg-amethyst-950/60 backdrop-blur-sm flex items-center justify-center p-6"
                       >
                         <motion.div 
                           initial={{ scale: 0.9, opacity: 0 }}
                           animate={{ scale: 1, opacity: 1 }}
-                          className="bg-white rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl"
+                          className="bg-amethyst-900 rounded-3xl p-8 max-w-sm w-full text-center shadow-2xl border border-amethyst-500/10"
                         >
-                          <div className="w-16 h-16 bg-red-100 text-red-600 rounded-full flex items-center justify-center mx-auto mb-4">
+                          <div className="w-16 h-16 bg-red-500/10 text-red-500 rounded-full flex items-center justify-center mx-auto mb-4">
                             <AlertCircle size={32} />
                           </div>
-                          <h3 className="text-xl font-medium mb-2">Delete Photo?</h3>
-                          <p className="text-sm text-black/40 mb-8">This action cannot be undone. This memory will be removed from your gallery.</p>
+                          <h3 className="text-xl font-medium mb-2 text-amethyst-50">Delete Photo?</h3>
+                          <p className="text-sm text-amethyst-300/40 mb-8">This action cannot be undone. This memory will be removed from your gallery.</p>
                           <div className="flex gap-3">
                             <button 
                               onClick={() => setIsDeleting(false)}
-                              className="flex-1 px-4 py-2 rounded-xl border border-black/5 hover:bg-black/5 transition-all text-sm font-medium"
+                              className="flex-1 px-4 py-2 rounded-xl border border-amethyst-500/10 hover:bg-white/5 transition-all text-sm font-medium text-amethyst-100"
                             >
                               Cancel
                             </button>
@@ -1032,21 +1292,21 @@ export default function App() {
                 </motion.div>
                 <div className="mt-4 flex items-center justify-between px-2">
                   <div>
-                    <h2 className="text-xl font-medium">{selectedPhoto.filename}</h2>
-                    <p className="text-sm text-black/40 flex items-center gap-2">
+                    <h2 className="text-xl font-medium text-amethyst-50">{selectedPhoto.filename}</h2>
+                    <p className="text-sm text-amethyst-300/40 flex items-center gap-2">
                       <Calendar size={14} />
                       {format(new Date(selectedPhoto.created_at), 'MMMM d, yyyy • HH:mm')}
                     </p>
                   </div>
-                  <div className="flex items-center gap-4 text-sm text-black/40">
+                  <div className="flex items-center gap-4 text-sm text-amethyst-300/40">
                     <div className="relative group/move">
-                      <button className="flex items-center gap-1 hover:text-black">
+                      <button className="flex items-center gap-1 hover:text-amethyst-100">
                         <Folder size={14} /> Move to
                       </button>
-                      <div className="absolute bottom-full left-0 mb-2 bg-white border border-black/5 rounded-xl shadow-xl p-2 hidden group-hover/move:block w-48 z-50">
-                        <button onClick={() => movePhotoToFolder(selectedPhoto.id, null)} className="w-full text-left px-3 py-2 rounded-lg hover:bg-black/5 text-xs">Root</button>
+                      <div className="absolute bottom-full left-0 mb-2 bg-amethyst-900 border border-amethyst-500/10 rounded-xl shadow-xl p-2 hidden group-hover/move:block w-48 z-50">
+                        <button onClick={() => movePhotoToFolder(selectedPhoto.id, null)} className="w-full text-left px-3 py-2 rounded-lg hover:bg-white/5 text-xs text-amethyst-100">Root</button>
                         {folders.map(f => (
-                          <button key={f.id} onClick={() => movePhotoToFolder(selectedPhoto.id, f.id)} className="w-full text-left px-3 py-2 rounded-lg hover:bg-black/5 text-xs">{f.name}</button>
+                          <button key={f.id} onClick={() => movePhotoToFolder(selectedPhoto.id, f.id)} className="w-full text-left px-3 py-2 rounded-lg hover:bg-white/5 text-xs text-amethyst-100">{f.name}</button>
                         ))}
                       </div>
                     </div>
@@ -1057,9 +1317,9 @@ export default function App() {
               </div>
 
               {/* Notes Panel (Obsidian Style) */}
-              <div className="w-full md:w-[400px] flex flex-col bg-white rounded-3xl border border-black/5 shadow-2xl overflow-hidden">
-                <div className="p-4 border-b border-black/5 flex items-center justify-between bg-black/5">
-                  <div className="flex items-center gap-2">
+              <div className="w-full md:w-[400px] flex flex-col bg-amethyst-900/40 rounded-3xl border border-amethyst-500/10 shadow-2xl overflow-hidden">
+                <div className="p-4 border-b border-amethyst-500/10 flex items-center justify-between bg-amethyst-900/60">
+                  <div className="flex items-center gap-2 text-amethyst-100">
                     <Edit3 size={16} />
                     <span className="font-medium text-sm">Description (Markdown)</span>
                   </div>
@@ -1067,7 +1327,7 @@ export default function App() {
                     {isEditingNote ? (
                       <button 
                         onClick={saveNote}
-                        className="flex items-center gap-1 bg-black text-white px-3 py-1 rounded-lg text-xs hover:bg-black/80 transition-all"
+                        className="flex items-center gap-1 bg-amethyst-600 text-white px-3 py-1 rounded-lg text-xs hover:bg-amethyst-500 transition-all"
                       >
                         <Save size={14} />
                         Save
@@ -1075,7 +1335,7 @@ export default function App() {
                     ) : (
                       <button 
                         onClick={() => setIsEditingNote(true)}
-                        className="p-1.5 rounded-lg hover:bg-black/5 transition-all"
+                        className="p-1.5 rounded-lg hover:bg-white/5 transition-all text-amethyst-300"
                       >
                         <Edit3 size={18} />
                       </button>
@@ -1083,21 +1343,21 @@ export default function App() {
                   </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-6" onClick={handleNoteLinkClick}>
+                <div className="flex-1 overflow-y-auto p-6 text-amethyst-50" onClick={handleNoteLinkClick}>
                   {isEditingNote ? (
                     <textarea 
                       value={note}
                       onChange={(e) => setNote(e.target.value)}
                       placeholder="Write your thoughts, markdown supported..."
-                      className="w-full h-full resize-none outline-none font-mono text-sm leading-relaxed"
+                      className="w-full h-full bg-transparent resize-none outline-none font-mono text-sm leading-relaxed text-amethyst-50 placeholder:text-amethyst-300/20"
                       autoFocus
                     />
                   ) : (
-                    <div className="prose prose-sm max-w-none">
+                    <div className="prose prose-sm prose-invert max-w-none">
                       {note ? (
                         <ReactMarkdown>{renderNote(note)}</ReactMarkdown>
                       ) : (
-                        <p className="text-black/30 italic">No description yet. Click edit to add context to this memory.</p>
+                        <p className="text-amethyst-300/30 italic">No description yet. Click edit to add context to this memory.</p>
                       )}
                     </div>
                   )}
@@ -1140,10 +1400,10 @@ export default function App() {
             initial={{ y: 100, opacity: 0 }}
             animate={{ y: 0, opacity: 1 }}
             exit={{ y: 100, opacity: 0 }}
-            className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[80] bg-black text-white px-4 md:px-6 py-4 rounded-3xl shadow-2xl flex items-center gap-4 md:gap-8 backdrop-blur-xl bg-black/90 w-[calc(100%-2rem)] md:w-auto max-w-2xl"
+            className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[80] bg-amethyst-900 text-amethyst-50 px-4 md:px-6 py-4 rounded-3xl shadow-2xl flex items-center gap-4 md:gap-8 backdrop-blur-xl bg-amethyst-900/90 w-[calc(100%-2rem)] md:w-auto max-w-2xl border border-amethyst-500/10"
           >
-            <div className="flex items-center gap-2 md:gap-4 pr-4 md:pr-8 border-r border-white/10 shrink-0">
-              <button onClick={clearSelection} className="p-1 hover:bg-white/10 rounded-full">
+            <div className="flex items-center gap-2 md:gap-4 pr-4 md:pr-8 border-r border-amethyst-500/10 shrink-0">
+              <button onClick={clearSelection} className="p-1 hover:bg-white/10 rounded-full text-amethyst-300">
                 <X size={20} />
               </button>
               <span className="text-sm font-bold">{selectedPhotoIds.size} selected</span>
@@ -1151,31 +1411,61 @@ export default function App() {
 
             <div className="flex items-center gap-6">
               <div className="relative group/bulk-move">
-                <button className="flex items-center gap-2 text-sm font-medium hover:text-white/70 transition-all">
+                <button className="flex items-center gap-2 text-sm font-medium hover:text-amethyst-300 transition-all">
                   <Folder size={18} />
                   <span>Move</span>
                 </button>
-                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 bg-white text-black border border-black/5 rounded-2xl shadow-2xl p-2 hidden group-hover/bulk-move:block w-48 z-[90]">
-                  <p className="text-[10px] font-bold text-black/40 uppercase tracking-widest mb-2 px-2">Move to</p>
-                  <button onClick={() => bulkMove(null)} className="w-full text-left px-3 py-2 rounded-xl hover:bg-black/5 text-sm">Root</button>
-                  {folders.map(f => (
-                    <button key={f.id} onClick={() => bulkMove(f.id)} className="w-full text-left px-3 py-2 rounded-xl hover:bg-black/5 text-sm">{f.name}</button>
-                  ))}
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 bg-amethyst-900 text-amethyst-50 border border-amethyst-500/10 rounded-2xl shadow-2xl p-2 hidden group-hover/bulk-move:block w-56 z-[90]">
+                  <div className="p-2 border-b border-amethyst-500/10 mb-2">
+                    <p className="text-[10px] font-bold text-amethyst-300/40 uppercase tracking-widest mb-2">Move to</p>
+                    <div className="flex gap-1">
+                      <input 
+                        type="text" 
+                        placeholder="New folder..." 
+                        className="flex-1 text-[10px] bg-amethyst-950 border border-amethyst-500/10 rounded-lg px-2 py-1 outline-none text-amethyst-50"
+                        onKeyDown={async (e) => {
+                          if (e.key === 'Enter' && e.currentTarget.value.trim()) {
+                            const name = e.currentTarget.value.trim();
+                            const id = uuidv4();
+                            await fetch('/api/folders', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ id, name, parent_id: currentFolderId })
+                            });
+                            e.currentTarget.value = '';
+                            fetchFolders();
+                            bulkMove(id);
+                          }
+                        }}
+                      />
+                      <button className="p-1 bg-amethyst-600 rounded-lg"><Plus size={12} /></button>
+                    </div>
+                  </div>
+                  <div className="max-h-48 overflow-y-auto custom-scrollbar">
+                    <button onClick={() => bulkMove(null)} className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/5 text-sm flex items-center gap-2">
+                      <Folder size={14} className="text-amethyst-400" /> Root
+                    </button>
+                    {folders.map(f => (
+                      <button key={f.id} onClick={() => bulkMove(f.id)} className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/5 text-sm flex items-center gap-2">
+                        <Folder size={14} className="text-amethyst-400" /> {f.name}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
 
               <div className="relative group/bulk-tag">
-                <button className="flex items-center gap-2 text-sm font-medium hover:text-white/70 transition-all">
+                <button className="flex items-center gap-2 text-sm font-medium hover:text-amethyst-300 transition-all">
                   <Tag size={18} />
                   <span>Tag</span>
                 </button>
-                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 bg-white text-black border border-black/5 rounded-2xl shadow-2xl p-4 hidden group-hover/bulk-tag:block w-64 z-[90]">
-                  <p className="text-[10px] font-bold text-black/40 uppercase tracking-widest mb-2">Add tag to all</p>
+                <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-4 bg-amethyst-900 text-amethyst-50 border border-amethyst-500/10 rounded-2xl shadow-2xl p-4 hidden group-hover/bulk-tag:block w-64 z-[90]">
+                  <p className="text-[10px] font-bold text-amethyst-300/40 uppercase tracking-widest mb-2">Add tag to all</p>
                   <div className="flex gap-2">
                     <input 
                       type="text" 
                       placeholder="Tag name..." 
-                      className="flex-1 text-xs border border-black/10 rounded-lg px-2 py-1 outline-none"
+                      className="flex-1 text-xs bg-amethyst-950 border border-amethyst-500/10 rounded-lg px-2 py-1 outline-none text-amethyst-50"
                       onKeyDown={(e) => {
                         if (e.key === 'Enter') {
                           bulkAddTag(e.currentTarget.value);
@@ -1245,50 +1535,72 @@ export default function App() {
             animate={{ opacity: 1, scale: 1 }}
             exit={{ opacity: 0, scale: 0.95 }}
             style={{ top: contextMenu.y, left: contextMenu.x }}
-            className="fixed z-[100] bg-white border border-black/5 rounded-2xl shadow-2xl p-2 w-48 overflow-hidden"
+            className="fixed z-[100] bg-amethyst-900 border border-amethyst-500/10 rounded-2xl shadow-2xl p-2 w-48 overflow-hidden text-amethyst-50"
           >
             {contextMenu.photo && (
               <>
-                <div className="px-3 py-2 border-b border-black/5 mb-1">
-                  <p className="text-[10px] font-bold text-black/30 uppercase tracking-widest truncate">{contextMenu.photo.filename}</p>
+                <div className="px-3 py-2 border-b border-amethyst-500/10 mb-1">
+                  <p className="text-[10px] font-bold text-amethyst-300/30 uppercase tracking-widest truncate">{contextMenu.photo.filename}</p>
                 </div>
                 <button 
                   onClick={() => { setSelectedPhoto(contextMenu.photo!); closeContextMenu(); }}
-                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-black/5 text-sm flex items-center gap-2"
+                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/5 text-sm flex items-center gap-2"
                 >
                   <Maximize2 size={14} /> View Full
                 </button>
                 <button 
                   onClick={() => { setSelectedPhoto(contextMenu.photo!); setIsEditingNote(true); closeContextMenu(); }}
-                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-black/5 text-sm flex items-center gap-2"
+                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/5 text-sm flex items-center gap-2"
                 >
                   <Tag size={14} /> Add Tag / Note
                 </button>
                 <div className="relative group/move">
-                  <button className="w-full text-left px-3 py-2 rounded-xl hover:bg-black/5 text-sm flex items-center gap-2">
+                  <button className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/5 text-sm flex items-center gap-2">
                     <Folder size={14} /> Move to...
                   </button>
-                  <div className="absolute left-full top-0 ml-1 bg-white border border-black/5 rounded-2xl shadow-2xl p-2 hidden group-hover:block w-48">
+                  <div className="absolute left-full top-0 ml-1 bg-amethyst-900 border border-amethyst-500/10 rounded-2xl shadow-2xl p-2 hidden group-hover:block w-52">
+                    <div className="p-2 border-b border-amethyst-500/10 mb-2">
+                      <input 
+                        type="text" 
+                        placeholder="New folder..." 
+                        className="w-full text-[10px] bg-amethyst-950 border border-amethyst-500/10 rounded-lg px-2 py-1 outline-none text-amethyst-50"
+                        onKeyDown={async (e) => {
+                          if (e.key === 'Enter' && e.currentTarget.value.trim()) {
+                            const name = e.currentTarget.value.trim();
+                            const id = uuidv4();
+                            await fetch('/api/folders', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ id, name, parent_id: currentFolderId })
+                            });
+                            e.currentTarget.value = '';
+                            fetchFolders();
+                            movePhotoToFolder(contextMenu.photo!.id, id);
+                            closeContextMenu();
+                          }
+                        }}
+                      />
+                    </div>
                     <button 
                       onClick={() => { movePhotoToFolder(contextMenu.photo!.id, null); closeContextMenu(); }}
-                      className="w-full text-left px-3 py-2 rounded-xl hover:bg-black/5 text-sm"
+                      className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/5 text-sm flex items-center gap-2"
                     >
-                      Root
+                      <Folder size={14} className="text-amethyst-400" /> Root
                     </button>
                     {folders.map(f => (
                       <button 
                         key={f.id}
                         onClick={() => { movePhotoToFolder(contextMenu.photo!.id, f.id); closeContextMenu(); }}
-                        className="w-full text-left px-3 py-2 rounded-xl hover:bg-black/5 text-sm"
+                        className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/5 text-sm flex items-center gap-2"
                       >
-                        {f.name}
+                        <Folder size={14} className="text-amethyst-400" /> {f.name}
                       </button>
                     ))}
                   </div>
                 </div>
                 <button 
                   onClick={() => { setIsDeleting(true); setSelectedPhoto(contextMenu.photo!); closeContextMenu(); }}
-                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-red-50 text-red-500 text-sm flex items-center gap-2"
+                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-red-500/10 text-red-500 text-sm flex items-center gap-2"
                 >
                   <Trash2 size={14} /> Delete
                 </button>
@@ -1297,12 +1609,12 @@ export default function App() {
 
             {contextMenu.folder && (
               <>
-                <div className="px-3 py-2 border-b border-black/5 mb-1">
-                  <p className="text-[10px] font-bold text-black/30 uppercase tracking-widest truncate">{contextMenu.folder.name}</p>
+                <div className="px-3 py-2 border-b border-amethyst-500/10 mb-1">
+                  <p className="text-[10px] font-bold text-amethyst-300/30 uppercase tracking-widest truncate">{contextMenu.folder.name}</p>
                 </div>
                 <button 
                   onClick={() => { setIsEditingFolder(contextMenu.folder!); closeContextMenu(); }}
-                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-black/5 text-sm flex items-center gap-2"
+                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-white/5 text-sm flex items-center gap-2"
                 >
                   <Edit3 size={14} /> Rename
                 </button>
@@ -1311,7 +1623,7 @@ export default function App() {
                     deleteFolder(contextMenu.folder!.id);
                     closeContextMenu(); 
                   }}
-                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-red-50 text-red-500 text-sm flex items-center gap-2"
+                  className="w-full text-left px-3 py-2 rounded-xl hover:bg-red-500/10 text-red-500 text-sm flex items-center gap-2"
                 >
                   <Trash2 size={14} /> Delete
                 </button>
@@ -1324,13 +1636,13 @@ export default function App() {
       {/* Folder Edit Modal */}
       <AnimatePresence>
         {isEditingFolder && (
-          <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-black/40 backdrop-blur-sm">
+          <div className="fixed inset-0 z-[110] flex items-center justify-center p-6 bg-amethyst-950/40 backdrop-blur-sm">
             <motion.div 
               initial={{ scale: 0.9, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
-              className="bg-white rounded-3xl p-8 max-w-sm w-full shadow-2xl"
+              className="bg-amethyst-900 rounded-3xl p-8 max-w-sm w-full shadow-2xl border border-amethyst-500/10"
             >
-              <h3 className="text-xl font-medium mb-4">Rename Folder</h3>
+              <h3 className="text-xl font-medium mb-4 text-amethyst-50">Rename Folder</h3>
               <input 
                 autoFocus
                 type="text" 
@@ -1342,12 +1654,12 @@ export default function App() {
                   }
                   if (e.key === 'Escape') setIsEditingFolder(null);
                 }}
-                className="w-full px-4 py-2 rounded-xl border border-black/10 outline-none focus:border-black transition-all mb-6"
+                className="w-full px-4 py-2 rounded-xl bg-amethyst-950 border border-amethyst-500/10 outline-none focus:border-amethyst-500 transition-all mb-6 text-amethyst-50"
               />
               <div className="flex gap-3">
                 <button 
                   onClick={() => setIsEditingFolder(null)}
-                  className="flex-1 px-4 py-2 rounded-xl border border-black/5 hover:bg-black/5 transition-all text-sm font-medium"
+                  className="flex-1 px-4 py-2 rounded-xl border border-amethyst-500/10 hover:bg-white/5 transition-all text-sm font-medium text-amethyst-100"
                 >
                   Cancel
                 </button>
@@ -1357,7 +1669,7 @@ export default function App() {
                     updateFolderName(isEditingFolder.id, input.value);
                     setIsEditingFolder(null);
                   }}
-                  className="flex-1 px-4 py-2 rounded-xl bg-black text-white hover:bg-black/80 transition-all text-sm font-medium"
+                  className="flex-1 px-4 py-2 rounded-xl bg-amethyst-600 text-white hover:bg-amethyst-500 transition-all text-sm font-medium"
                 >
                   Save
                 </button>
@@ -1390,6 +1702,7 @@ function LongPressWrapper({ children, onLongPress }: { children: React.ReactNode
       onMouseLeave={stop}
       onTouchStart={start}
       onTouchEnd={stop}
+      onDragStart={stop}
       className="w-full h-full"
     >
       {children}
@@ -1399,14 +1712,22 @@ function LongPressWrapper({ children, onLongPress }: { children: React.ReactNode
 
 function Thumbnail({ photoId, className, alt, style }: { photoId: string, className?: string, alt?: string, style?: React.CSSProperties }) {
   const [src, setSrc] = useState<string | null>(null);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
     get(`photo_${photoId}`).then(data => {
       if (data) setSrc(data);
-    });
+      else setError(true);
+    }).catch(() => setError(true));
   }, [photoId]);
 
-  if (!src) return <div className={cn("bg-black/5 animate-pulse", className)} style={style} />;
+  if (error) return (
+    <div className={cn("bg-amethyst-900/40 flex items-center justify-center text-amethyst-500/20", className)} style={style}>
+      <AlertCircle size={24} />
+    </div>
+  );
+
+  if (!src) return <div className={cn("bg-amethyst-900/20 animate-pulse", className)} style={style} />;
 
   return (
     <img 
@@ -1415,6 +1736,7 @@ function Thumbnail({ photoId, className, alt, style }: { photoId: string, classN
       className={className} 
       style={style}
       referrerPolicy="no-referrer"
+      onError={() => setError(true)}
     />
   );
 }

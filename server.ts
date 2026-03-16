@@ -20,8 +20,11 @@ db.exec(`
     size INTEGER,
     width INTEGER,
     height INTEGER,
+    folder_id TEXT,
+    access_count INTEGER DEFAULT 0,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (folder_id) REFERENCES folders(id) ON DELETE SET NULL
   );
 
   CREATE TABLE IF NOT EXISTS notes (
@@ -65,6 +68,12 @@ db.exec(`
 // Add folder_id column if it doesn't exist
 try {
   db.exec("ALTER TABLE photos ADD COLUMN folder_id TEXT REFERENCES folders(id) ON DELETE SET NULL");
+} catch (e) {
+  // Column likely already exists
+}
+
+try {
+  db.exec("ALTER TABLE photos ADD COLUMN access_count INTEGER DEFAULT 0");
 } catch (e) {
   // Column likely already exists
 }
@@ -157,14 +166,21 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  app.patch("/api/photos/:id/access", (req, res) => {
+    db.prepare("UPDATE photos SET access_count = access_count + 1 WHERE id = ?").run(req.params.id);
+    res.json({ success: true });
+  });
+
   app.patch("/api/photos/:id/folder", (req, res) => {
     const { folder_id } = req.body;
+    console.log(`Moving photo ${req.params.id} to folder ${folder_id}`);
     db.prepare("UPDATE photos SET folder_id = ? WHERE id = ?").run(folder_id, req.params.id);
     res.json({ success: true });
   });
 
   app.post("/api/photos/bulk-move", (req, res) => {
     const { ids, folder_id } = req.body;
+    console.log(`Bulk moving ${ids.length} photos to folder ${folder_id}`);
     const stmt = db.prepare("UPDATE photos SET folder_id = ? WHERE id = ?");
     const transaction = db.transaction((photoIds, fId) => {
       for (const id of photoIds) stmt.run(fId, id);

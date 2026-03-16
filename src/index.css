@@ -5,10 +5,34 @@
   --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
   --font-serif: "Libre Baskerville", serif;
   --font-mono: "JetBrains Mono", monospace;
+  
+  --color-amethyst-50: #f5f3ff;
+  --color-amethyst-100: #ede9fe;
+  --color-amethyst-200: #ddd6fe;
+  --color-amethyst-300: #c4b5fd;
+  --color-amethyst-400: #a78bfa;
+  --color-amethyst-500: #8b5cf6;
+  --color-amethyst-600: #7c3aed;
+  --color-amethyst-700: #6d28d9;
+  --color-amethyst-800: #5b21b6;
+  --color-amethyst-900: #4c1d95;
+  --color-amethyst-950: #0f0720;
 }
 
 body {
-  @apply antialiased;
+  @apply antialiased bg-[#0f0720] text-amethyst-50 selection:bg-amethyst-500/30;
+}
+
+.amethyst-glass {
+  @apply bg-amethyst-950/40 backdrop-blur-xl border border-amethyst-500/10;
+}
+
+.amethyst-card {
+  @apply bg-amethyst-900/20 hover:bg-amethyst-900/40 border border-amethyst-500/10 transition-all duration-300;
+}
+
+.amethyst-gradient {
+  @apply bg-gradient-to-br from-amethyst-600 to-amethyst-900;
 }
 
 .serif {
